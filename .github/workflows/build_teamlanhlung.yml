@@ -98,10 +98,18 @@ jobs:
 
       - name: Update repository
         run: |
-          # Copy APK files
-          cp main/repo/apk/*.apk repo/ 2>/dev/null || true
-          cp main/repo/icon/*.png repo/ 2>/dev/null || true
-          cp main/repo/index.min.json repo/ 2>/dev/null || true
+          # Copy generated files to repo branch
+          if [ -f main/repo/index.min.json ]; then
+            cp main/repo/index.min.json repo/
+          fi
+          
+          if [ -d main/repo/apk ] && [ "$(ls -A main/repo/apk)" ]; then
+            cp main/repo/apk/*.apk repo/ 2>/dev/null || true
+          fi
+          
+          if [ -d main/repo/icon ] && [ "$(ls -A main/repo/icon)" ]; then
+            cp main/repo/icon/*.png repo/ 2>/dev/null || true
+          fi
           
           cd repo
           git config user.name "GitHub Actions"
