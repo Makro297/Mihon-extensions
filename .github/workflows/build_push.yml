@@ -1,15 +1,7 @@
-name: CI
+name: CI (Disabled)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '**'
-      - '!**.md'
-      - '!.github/**'
-      - '.github/scripts/**'
-      - '.github/workflows/build_push.yml'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
@@ -17,7 +9,6 @@ concurrency:
 
 env:
   CI_CHUNK_SIZE: 65
-  IS_PR_CHECK: false
 
 jobs:
   prepare:
