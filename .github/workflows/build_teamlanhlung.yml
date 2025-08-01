@@ -1,0 +1,116 @@
+name: Build Team Lanh Lung Extension
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/vi/teamlanhlung/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Team Lanh Lung Extension
+    runs-on: ubuntu-24.04
+    if: github.repository == 'Makro297/Mihon-extensions'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare signing key
+        run: |
+          echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
+
+      - name: Build Team Lanh Lung extension
+        env:
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew :src:vi:teamlanhlung:assembleRelease
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamlanhlung-extension
+          path: "src/vi/teamlanhlung/build/outputs/apk/release/*.apk"
+          retention-days: 30
+
+      - name: Clean up signing key
+        if: always()
+        run: rm -f signingkey.jks
+
+  publish:
+    name: Publish to Repository
+    needs: build
+    runs-on: ubuntu-24.04
+    if: github.repository == 'Makro297/Mihon-extensions'
+    
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: teamlanhlung-extension
+          path: apk/
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+
+      - name: Create repository structure
+        run: |
+          cd main
+          mkdir -p repo/apk repo/icon
+          cp ../apk/*.apk repo/apk/
+          
+          # Generate repository metadata using simple script
+          python ./.github/scripts/create-simple-repo.py
+
+      - name: Checkout repo branch
+        uses: actions/checkout@v4
+        with:
+          ref: repo
+          path: repo
+
+      - name: Update repository
+        run: |
+          # Copy APK files
+          cp main/repo/apk/*.apk repo/ 2>/dev/null || true
+          cp main/repo/icon/*.png repo/ 2>/dev/null || true
+          cp main/repo/index.min.json repo/ 2>/dev/null || true
+          
+          cd repo
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Update Team Lanh Lung extension [$(date)]"
+            git push
+          else
+            echo "No changes to commit"
+          fi
