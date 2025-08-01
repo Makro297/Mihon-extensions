@@ -11,7 +11,7 @@
 
 * You can add our repo by visiting the [Keiyoushi Website](https://keiyoushi.github.io/add-repo)
 * Otherwise, copy & paste the following URL: https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json
-* https://github.com/Makro297/Mihon-extensions/actions/runs/16675887133/job/47202413097
+* https://raw.githubusercontent.com/Makro297/Mihon-extensions/repo/index.min.json
 
 ## Requests
 
