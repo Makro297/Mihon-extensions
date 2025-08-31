@@ -1,14 +1,19 @@
 package eu.kanade.tachiyomi.extension.vi.teamlanhlung
 
+import android.content.SharedPreferences
 import android.util.Base64
+import android.widget.Toast
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.POST
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.ParsedHttpSource
+import keiyoushi.utils.getPreferences
 import keiyoushi.utils.parseAs
 import okhttp3.FormBody
 import okhttp3.Headers
@@ -28,17 +33,32 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
-class TeamLanhLung : ParsedHttpSource() {
+class TeamLanhLung : ParsedHttpSource(), ConfigurableSource {
 
     override val name: String = "Team Lạnh Lùng"
 
-    override val baseUrl: String = "https://teamlanhlungday1.xyz/"
+    private val defaultBaseUrl: String = "https://teamlanhlungday1.xyz/"
 
     override val lang: String = "vi"
 
     override val supportsLatest: Boolean = false
 
     override val client: OkHttpClient = network.cloudflareClient
+
+    private val preferences: SharedPreferences = getPreferences()
+
+    init {
+        preferences.getString(DEFAULT_BASE_URL_PREF, null).let { prefDefaultBaseUrl ->
+            if (prefDefaultBaseUrl != defaultBaseUrl) {
+                preferences.edit()
+                    .putString(BASE_URL_PREF, defaultBaseUrl)
+                    .putString(DEFAULT_BASE_URL_PREF, defaultBaseUrl)
+                    .apply()
+            }
+        }
+    }
+
+    override val baseUrl by lazy { getPrefBaseUrl() }
 
     override fun headersBuilder(): Headers.Builder = super.headersBuilder().add("Referer", "$baseUrl/")
 
@@ -212,6 +232,25 @@ class TeamLanhLung : ParsedHttpSource() {
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException()
 
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val baseUrlPref = androidx.preference.EditTextPreference(screen.context).apply {
+            key = BASE_URL_PREF
+            title = BASE_URL_PREF_TITLE
+            summary = BASE_URL_PREF_SUMMARY
+            setDefaultValue(defaultBaseUrl)
+            dialogTitle = BASE_URL_PREF_TITLE
+            dialogMessage = "Default: $defaultBaseUrl"
+
+            setOnPreferenceChangeListener { _, _ ->
+                Toast.makeText(screen.context, RESTART_APP, Toast.LENGTH_LONG).show()
+                true
+            }
+        }
+        screen.addPreference(baseUrlPref)
+    }
+
+    private fun getPrefBaseUrl(): String = preferences.getString(BASE_URL_PREF, defaultBaseUrl)!!
+
     // https://stackoverflow.com/a/66614516
     private fun String.decodeHex(): ByteArray {
         check(length % 2 == 0) { "Must have an even length" }
@@ -236,5 +275,12 @@ class TeamLanhLung : ParsedHttpSource() {
         private val patternsSubstitution: List<Regex> = (20 downTo 1).map { i ->
             """^https(.{$i})(.{$i}).*(.{$i})(?:webp|jpeg|tiff|.{3})$""".toRegex()
         }
+
+        private const val DEFAULT_BASE_URL_PREF = "defaultBaseUrl"
+        private const val RESTART_APP = "Khởi chạy lại ứng dụng để áp dụng thay đổi."
+        private const val BASE_URL_PREF_TITLE = "Ghi đè URL cơ sở"
+        private const val BASE_URL_PREF = "overrideBaseUrl"
+        private const val BASE_URL_PREF_SUMMARY =
+            "Dành cho sử dụng tạm thời, cập nhật tiện ích sẽ xóa cài đặt."
     }
 }
