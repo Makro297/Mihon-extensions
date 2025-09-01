@@ -18,3 +18,10 @@ data class SearchEntryDto(
     val title: String,
     val vote: String,
 )
+
+@Serializable
+data class CipherDto(
+    val ciphertext: String,
+    val iv: String,
+    val salt: String,
+)

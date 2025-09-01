@@ -37,7 +37,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override val name: String = "Vcomycs"
 
-    private val defaultBaseUrl: String = "https://vivicomi6.info/"
+    private val defaultBaseUrl: String = "https://vivicomi6.info"
 
     override val lang: String = "vi"
 
