@@ -2,7 +2,6 @@ package eu.kanade.tachiyomi.extension.vi.vcomycs
 
 import android.content.SharedPreferences
 import android.util.Base64
-import android.util.Log
 import android.widget.Toast
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
@@ -137,28 +136,15 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
     }
 
     override fun mangaDetailsParse(document: Document) = SManga.create().apply {
-        Log.d("Vcomycs-Details", "=== Parsing manga details ===")
-        Log.d("Vcomycs-Details", "Document title: ${document.title()}")
-        Log.d("Vcomycs-Details", "Document URL: ${document.location()}")
-        
         title = document.select(".info-title").text()
-        Log.d("Vcomycs-Details", "Title: $title")
-        
         author = document.select(".comic-info strong:contains(Tác giả) + span").text().trim()
-        Log.d("Vcomycs-Details", "Author: $author")
-        
         description = document.select(".intro-container .text-justify").text().substringBefore("— Xem Thêm —")
-        Log.d("Vcomycs-Details", "Description length: ${description?.length ?: 0}")
-        
         genre = document.select(".comic-info .tags a").joinToString { tag ->
             tag.text().split(' ').joinToString(separator = " ") { word ->
                 word.replaceFirstChar { it.titlecase() }
             }
         }
-        Log.d("Vcomycs-Details", "Genres: $genre")
-        
         thumbnail_url = document.select(".img-thumbnail").attr("abs:src")
-        Log.d("Vcomycs-Details", "Thumbnail URL: $thumbnail_url")
 
         val statusString = document.select(".comic-info strong:contains(Tình trạng) + span").text()
         status = when (statusString) {
@@ -166,31 +152,19 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
             "Trọn bộ " -> SManga.COMPLETED
             else -> SManga.UNKNOWN
         }
-        Log.d("Vcomycs-Details", "Status: $statusString -> $status")
     }
 
     override fun chapterListSelector(): String = ".chapter-table table tbody tr"
 
     override fun chapterFromElement(element: Element) = SChapter.create().apply {
-        val chapterUrl = element.select("a").attr("href")
-        setUrlWithoutDomain(chapterUrl)
+        setUrlWithoutDomain(element.select("a").attr("href"))
         name = element.select("a .hidden-sm").text()
         date_upload = runCatching {
             dateFormat.parse(element.select("td").last()!!.text())?.time
         }.getOrNull() ?: 0
-        
-        Log.d("Vcomycs-Chapter", "Chapter: $name | URL: $chapterUrl | Date: $date_upload")
     }
 
     protected fun decodeImgList(document: Document): String {
-        Log.d("Vcomycs-Decrypt", "=== Starting decodeImgList ===")
-        Log.d("Vcomycs-Decrypt", "Document title: ${document.title()}")
-        Log.d("Vcomycs-Decrypt", "Document URL: ${document.location()}")
-        
-        // Check for scripts containing image data
-        val allScripts = document.select("script")
-        Log.d("Vcomycs-Decrypt", "Total scripts found: ${allScripts.size}")
-        
         val htmlContentScript = document.selectFirst("script:containsData(htmlContent)")?.html()
             ?.substringAfter("var htmlContent=\"")
             ?.substringBefore("\";")
@@ -198,24 +172,16 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
             ?.replace("\\\\", "\\")
             ?.replace("\\/", "/")
             ?: throw Exception("Couldn't find script with image data.")
-            
-        Log.d("Vcomycs-Decrypt", "Found htmlContent script, length: ${htmlContentScript.length}")
-        Log.d("Vcomycs-Decrypt", "htmlContent preview: ${htmlContentScript.take(100)}...")
-        
         val htmlContent = htmlContentScript.parseAs<CipherDto>()
         val ciphertext = Base64.decode(htmlContent.ciphertext, Base64.DEFAULT)
         val iv = htmlContent.iv.decodeHex()
         val salt = htmlContent.salt.decodeHex()
-        
-        Log.d("Vcomycs-Decrypt", "Parsed cipher data - ciphertext length: ${ciphertext.size}, iv length: ${iv.size}, salt length: ${salt.size}")
 
         val passwordScript = document.selectFirst("script:containsData(chapterHTML)")?.html()
             ?: throw Exception("Couldn't find password to decrypt image data.")
         val passphrase = passwordScript.substringAfter("var chapterHTML=CryptoJSAesDecrypt('")
             .substringBefore("',htmlContent")
             .replace("'+'", "")
-            
-        Log.d("Vcomycs-Decrypt", "Found passphrase, length: ${passphrase.length}")
 
         val keyFactory = SecretKeyFactory.getInstance(KEY_ALGORITHM)
         val spec = PBEKeySpec(passphrase.toCharArray(), salt, 999, 256)
@@ -225,55 +191,21 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
         cipher.init(Cipher.DECRYPT_MODE, keyS, IvParameterSpec(iv))
 
         val imgListHtml = cipher.doFinal(ciphertext).toString(Charsets.UTF_8)
-        
-        Log.d("Vcomycs-Decrypt", "Decryption successful, result length: ${imgListHtml.length}")
-        Log.d("Vcomycs-Decrypt", "Decrypted HTML preview: ${imgListHtml.take(200)}...")
 
         return imgListHtml
     }
 
     override fun pageListParse(document: Document): List<Page> {
-        Log.d("Vcomycs-PageList", "=== Starting pageListParse ===")
-        Log.d("Vcomycs-PageList", "Document title: ${document.title()}")
-        Log.d("Vcomycs-PageList", "Document URL: ${document.location()}")
-        
-        try {
             val imgListHtml = decodeImgList(document)
-            Log.d("Vcomycs-PageList", "Got decrypted HTML, parsing images...")
             
-            val parsedDoc = Jsoup.parseBodyFragment(imgListHtml)
-            val images = parsedDoc.select("img")
-            Log.d("Vcomycs-PageList", "Found ${images.size} images in decrypted HTML")
-            
-            val pages = images.mapIndexed { idx, element ->
+        return Jsoup.parseBodyFragment(imgListHtml).select("img").mapIndexed { idx, element ->
                 val encryptedUrl = element.attributes().find { it.key.startsWith("data") }?.value
                 val effectiveUrl = encryptedUrl?.decodeUrl() ?: element.attr("abs:src")
-                
-                Log.d("Vcomycs-PageList", "Image $idx:")
-                Log.d("Vcomycs-PageList", "  - Element: ${element.outerHtml().take(100)}...")
-                Log.d("Vcomycs-PageList", "  - Encrypted URL: $encryptedUrl")
-                Log.d("Vcomycs-PageList", "  - Effective URL: $effectiveUrl")
-                
                 Page(idx, imageUrl = effectiveUrl)
-            }
-            
-            Log.d("Vcomycs-PageList", "Successfully created ${pages.size} pages")
-            pages.forEachIndexed { idx, page ->
-                Log.d("Vcomycs-PageList", "Final Page $idx: ${page.imageUrl}")
-            }
-            
-            return pages
-            
-        } catch (e: Exception) {
-            Log.e("Vcomycs-PageList", "ERROR in pageListParse: ${e.message}")
-            Log.e("Vcomycs-PageList", "Stack trace: ${e.stackTraceToString()}")
-            throw e
         }
     }
 
     private fun String.decodeUrl(): String? {
-        Log.d("Vcomycs-Decode", "Attempting to decode URL: $this")
-        
         // We expect the URL to start with `https://`, where the last 3 characters are encoded.
         // The length of the encoded character is not known, but it is the same across all.
         // Essentially we are looking for the two encoded slashes, which tells us the length.
@@ -281,30 +213,20 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
             val matchResult = pattern.find(this)
             val g1 = matchResult?.groupValues?.get(1)
             val g2 = matchResult?.groupValues?.get(2)
-            Log.d("Vcomycs-Decode", "Pattern test - g1: '$g1', g2: '$g2', match: ${g1 == g2 && g1 != null}")
             g1 == g2 && g1 != null
         }
         if (patternIdx == -1) {
-            Log.d("Vcomycs-Decode", "No matching pattern found for: $this")
             return null
         }
-        
-        Log.d("Vcomycs-Decode", "Found pattern at index: $patternIdx")
 
         // With a known length we can predict all the encoded characters.
         // This is a slightly more expensive pattern, hence the separation.
         val matchResult = patternsSubstitution[patternIdx].find(this)
         return matchResult?.destructured?.let { (colon, slash, period) ->
-            Log.d("Vcomycs-Decode", "Substitution parts - colon: '$colon', slash: '$slash', period: '$period'")
-            val decodedUrl = this
+            this
                 .replace(colon, ":")
                 .replace(slash, "/")
                 .replace(period, ".")
-            Log.d("Vcomycs-Decode", "Successfully decoded to: $decodedUrl")
-            decodedUrl
-        } ?: run {
-            Log.d("Vcomycs-Decode", "Substitution failed for: $this")
-            null
         }
     }
 
