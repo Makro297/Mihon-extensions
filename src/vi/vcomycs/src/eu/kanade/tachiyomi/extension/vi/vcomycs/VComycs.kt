@@ -27,6 +27,7 @@ import rx.Observable
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.IvParameterSpec
@@ -37,13 +38,15 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override val name: String = "Vcomycs"
 
-    private val defaultBaseUrl: String = "https://vivicomi6.info/"
+    private val defaultBaseUrl: String = "https://vivicomi7.info/"
 
     override val lang: String = "vi"
 
     override val supportsLatest: Boolean = false
 
-    override val client: OkHttpClient = network.cloudflareClient
+    override val client: OkHttpClient = network.cloudflareClient.newBuilder()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
 
     private val preferences: SharedPreferences = getPreferences()
 
@@ -60,8 +63,11 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override val baseUrl by lazy { getPrefBaseUrl() }
 
-    override fun headersBuilder(): Headers.Builder = super.headersBuilder().add("Referer", "$baseUrl/")
+    override fun headersBuilder(): Headers.Builder = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
+        .add("User-Agent", "Mozilla/5.0 (Android) Mihon-Vcomycs")
 
+    // ========= Popular Manga =========
     override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/page/$page/", headers)
 
     override fun popularMangaSelector() = ".comic-list .comic-item:not(.grayscale-img)"
@@ -74,6 +80,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override fun popularMangaNextPageSelector() = "li.next:not(.disabled)"
 
+    // ========= Latest Updates (not supported) =========
     override fun latestUpdatesRequest(page: Int) = throw UnsupportedOperationException()
 
     override fun latestUpdatesSelector() = throw UnsupportedOperationException()
@@ -82,6 +89,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override fun latestUpdatesNextPageSelector() = throw UnsupportedOperationException()
 
+    // ========= Search =========
     override fun fetchSearchManga(page: Int, query: String, filters: FilterList): Observable<MangasPage> {
         return when {
             query.startsWith(PREFIX_ID_SEARCH) -> {
@@ -135,6 +143,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
         return MangasPage(manga, false)
     }
 
+    // ========= Manga Details =========
     override fun mangaDetailsParse(document: Document) = SManga.create().apply {
         title = document.select(".info-title").text()
         author = document.select(".comic-info strong:contains(Tác giả) + span").text().trim()
@@ -154,6 +163,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
         }
     }
 
+    // ========= Chapter List =========
     override fun chapterListSelector(): String = ".chapter-table table tbody tr"
 
     override fun chapterFromElement(element: Element) = SChapter.create().apply {
@@ -164,74 +174,117 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
         }.getOrNull() ?: 0
     }
 
-    protected fun decodeImgList(document: Document): String {
-        val htmlContentScript = document.selectFirst("script:containsData(htmlContent)")?.html()
-            ?.substringAfter("var htmlContent=\"")
-            ?.substringBefore("\";")
-            ?.replace("\\\"", "\"")
-            ?.replace("\\\\", "\\")
-            ?.replace("\\/", "/")
-            ?: throw Exception("Couldn't find script with image data.")
-        val htmlContent = htmlContentScript.parseAs<CipherDto>()
-        val ciphertext = Base64.decode(htmlContent.ciphertext, Base64.DEFAULT)
-        val iv = htmlContent.iv.decodeHex()
-        val salt = htmlContent.salt.decodeHex()
-
-        val passwordScript = document.selectFirst("script:containsData(chapterHTML)")?.html()
-            ?: throw Exception("Couldn't find password to decrypt image data.")
-        val passphrase = passwordScript.substringAfter("var chapterHTML=CryptoJSAesDecrypt('")
-            .substringBefore("',htmlContent")
-            .replace("'+'", "")
-
-        val keyFactory = SecretKeyFactory.getInstance(KEY_ALGORITHM)
-        val spec = PBEKeySpec(passphrase.toCharArray(), salt, 999, 256)
-        val keyS = SecretKeySpec(keyFactory.generateSecret(spec).encoded, "AES")
-
-        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, keyS, IvParameterSpec(iv))
-
-        val imgListHtml = cipher.doFinal(ciphertext).toString(Charsets.UTF_8)
-
-        return imgListHtml
-    }
-
+    // ========= Page List & Image Decryption (TRỌNG TÂM) =========
     override fun pageListParse(document: Document): List<Page> {
-            val imgListHtml = decodeImgList(document)
-            
-        return Jsoup.parseBodyFragment(imgListHtml).select("img").mapIndexed { idx, element ->
-                val encryptedUrl = element.attributes().find { it.key.startsWith("data") }?.value
-                val effectiveUrl = encryptedUrl?.decodeUrl() ?: element.attr("abs:src")
-                Page(idx, imageUrl = effectiveUrl)
-        }
-    }
+        val raw = document.html()
 
-    private fun String.decodeUrl(): String? {
-        // We expect the URL to start with `https://`, where the last 3 characters are encoded.
-        // The length of the encoded character is not known, but it is the same across all.
-        // Essentially we are looking for the two encoded slashes, which tells us the length.
-        val patternIdx = patternsLengthCheck.indexOfFirst { pattern ->
-            val matchResult = pattern.find(this)
-            val g1 = matchResult?.groupValues?.get(1)
-            val g2 = matchResult?.groupValues?.get(2)
-            g1 == g2 && g1 != null
-        }
-        if (patternIdx == -1) {
-            return null
+        println("Vcomycs-Decrypt: === Starting pageListParse ===")
+        println("Vcomycs-Decrypt: Document title: ${document.title()}")
+        println("Vcomycs-Decrypt: Document URL: ${document.location()}")
+
+        // 1) Bắt biến htmlContent = "....";
+        val regex = Regex("""htmlContent\s*=\s*(".*?");""")
+        val match = regex.find(raw)
+            ?: throw Exception("Không tìm thấy htmlContent trong trang chapter")
+
+        println("Vcomycs-Decrypt: Found htmlContent variable in script")
+
+        // 2) match.group(1) là một JSON string (bị escape). Giải escape thành String thật, rồi parse JSON object EncData
+        val jsonStringRaw = match.groupValues[1]
+        // Unescape JSON string: loại bỏ dấu ngoặc kép đầu/cuối và unescape các ký tự
+        val jsonString = jsonStringRaw
+            .trim()
+            .removeSurrounding("\"")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\/", "/")
+
+        println("Vcomycs-Decrypt: Decoded JSON string, length: ${jsonString.length}")
+        println("Vcomycs-Decrypt: JSON preview: ${jsonString.take(100)}...")
+
+        val encData = jsonString.parseAs<EncData>()
+        println("Vcomycs-Decrypt: Parsed EncData - ciphertext length: ${encData.ciphertext.length}, salt: ${encData.salt}, iv: ${encData.iv}")
+
+        // 3) Giải mã AES-256-CBC với PBKDF2-HMAC-SHA512 (iterations=999, keyLen=32)
+        val decryptedHtml = decryptChapterHtml(encData)
+        println("Vcomycs-Decrypt: Decrypted HTML, length: ${decryptedHtml.length}")
+        println("Vcomycs-Decrypt: Decrypted preview: ${decryptedHtml.take(200)}...")
+
+        // 4) Thay token → ký tự thật
+        val fixedHtml = decryptedHtml
+            .replace("EhwuFp", ".")
+            .replace("SJkhMV", ":")
+            .replace("uUPzrw", "/")
+
+        println("Vcomycs-Decrypt: Fixed HTML with token replacement")
+        println("Vcomycs-Decrypt: Fixed preview: ${fixedHtml.take(200)}...")
+
+        // 5) Parse ảnh từ data-ehwufp
+        val imgDoc = Jsoup.parse(fixedHtml, baseUrl)
+        val images = imgDoc.select("img[data-ehwufp], img[data-src], img[src]") // ưu tiên data-ehwufp
+
+        if (images.isEmpty()) {
+            println("Vcomycs-Decrypt: ERROR - No images found in decrypted HTML")
+            throw Exception("Không tìm thấy ảnh nào trong chapter")
         }
 
-        // With a known length we can predict all the encoded characters.
-        // This is a slightly more expensive pattern, hence the separation.
-        val matchResult = patternsSubstitution[patternIdx].find(this)
-        return matchResult?.destructured?.let { (colon, slash, period) ->
-            this
-                .replace(colon, ":")
-                .replace(slash, "/")
-                .replace(period, ".")
+        println("Vcomycs-Decrypt: Found ${images.size} images in decrypted HTML")
+
+        val pages = images.mapIndexed { index, img ->
+            val url = img.attr("data-ehwufp").ifBlank {
+                img.attr("data-src").ifBlank {
+                    img.absUrl("src")
+                }
+            }
+            println("Vcomycs-Decrypt: Page ${index + 1}: $url")
+            Page(index, imageUrl = url)
         }
+
+        println("Vcomycs-Decrypt: === Successfully parsed ${pages.size} pages ===")
+        return pages
     }
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException()
 
+    override fun imageRequest(page: Page): Request {
+        val imgHeaders = headersBuilder()
+            .set("Referer", "$baseUrl/")
+            .build()
+        return GET(page.imageUrl!!, imgHeaders)
+    }
+
+    // ========= Decryption Helper =========
+    private fun decryptChapterHtml(d: EncData): String {
+        val passphrase = "EhwuFp" + "SJkhMV" + "uUPzrw" // ghép chuỗi như mô tả cộng đồng
+
+        val saltBytes = d.salt.hexToBytes()
+        val ivBytes = d.iv.hexToBytes()
+        val cipherBytes = Base64.decode(d.ciphertext, Base64.DEFAULT)
+
+        // PBKDF2-HMAC-SHA512 -> 32 bytes key, 999 iterations
+        val skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
+        val spec = PBEKeySpec(passphrase.toCharArray(), saltBytes, 999, 256)
+        val keyBytes = skf.generateSecret(spec).encoded
+        val key = SecretKeySpec(keyBytes, "AES")
+
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(ivBytes))
+        val plaintext = cipher.doFinal(cipherBytes)
+        return String(plaintext, Charsets.UTF_8)
+    }
+
+    private fun String.hexToBytes(): ByteArray {
+        val clean = trim()
+        val out = ByteArray(clean.length / 2)
+        var i = 0
+        while (i < clean.length) {
+            out[i / 2] = ((clean[i].digitToInt(16) shl 4) + clean[i + 1].digitToInt(16)).toByte()
+            i += 2
+        }
+        return out
+    }
+
+    // ========= Preferences =========
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         val baseUrlPref = androidx.preference.EditTextPreference(screen.context).apply {
             key = BASE_URL_PREF
@@ -251,29 +304,10 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     private fun getPrefBaseUrl(): String = preferences.getString(BASE_URL_PREF, defaultBaseUrl)!!
 
-    // https://stackoverflow.com/a/66614516
-    private fun String.decodeHex(): ByteArray {
-        check(length % 2 == 0) { "Must have an even length" }
-
-        return chunked(2)
-            .map { it.toInt(16).toByte() }
-            .toByteArray()
-    }
-
     companion object {
-        const val KEY_ALGORITHM = "PBKDF2WithHmacSHA512"
-        const val CIPHER_TRANSFORMATION = "AES/CBC/PKCS7PADDING"
-
         const val PREFIX_ID_SEARCH = "id:"
         val dateFormat = SimpleDateFormat("dd/MM/yy", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Ho_Chi_Minh")
-        }
-
-        private val patternsLengthCheck: List<Regex> = (20 downTo 1).map { i ->
-            """^https.{$i}(.{$i})(.{$i})""".toRegex()
-        }
-        private val patternsSubstitution: List<Regex> = (20 downTo 1).map { i ->
-            """^https(.{$i})(.{$i}).*(.{$i})(?:webp|jpeg|tiff|.{3})$""".toRegex()
         }
 
         private const val DEFAULT_BASE_URL_PREF = "defaultBaseUrl"

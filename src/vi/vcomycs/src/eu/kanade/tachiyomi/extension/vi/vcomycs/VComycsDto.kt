@@ -20,8 +20,8 @@ data class SearchEntryDto(
 )
 
 @Serializable
-data class CipherDto(
+data class EncData(
     val ciphertext: String,
-    val iv: String,
     val salt: String,
+    val iv: String,
 )
