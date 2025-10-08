@@ -38,7 +38,7 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
 
     override val name: String = "Vcomycs"
 
-    private val defaultBaseUrl: String = "https://vivicomi7.info/"
+    private val defaultBaseUrl: String = "https://vivicomi7.info"
 
     override val lang: String = "vi"
 
@@ -125,7 +125,13 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
     override fun searchMangaNextPageSelector() = throw UnsupportedOperationException()
 
     override fun searchMangaParse(response: Response): MangasPage {
-        val dto = response.parseAs<SearchResponseDto>()
+        val responseBody = response.body.string()
+
+        if (responseBody.isBlank()) {
+            return MangasPage(emptyList(), false)
+        }
+
+        val dto = responseBody.parseAs<SearchResponseDto>()
 
         if (!dto.success) {
             return MangasPage(emptyList(), false)
@@ -174,24 +180,17 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
         }.getOrNull() ?: 0
     }
 
-    // ========= Page List & Image Decryption (TRỌNG TÂM) =========
+    // ========= Page List & Image Decryption =========
     override fun pageListParse(document: Document): List<Page> {
         val raw = document.html()
-
-        println("Vcomycs-Decrypt: === Starting pageListParse ===")
-        println("Vcomycs-Decrypt: Document title: ${document.title()}")
-        println("Vcomycs-Decrypt: Document URL: ${document.location()}")
 
         // 1) Bắt biến htmlContent = "....";
         val regex = Regex("""htmlContent\s*=\s*(".*?");""")
         val match = regex.find(raw)
             ?: throw Exception("Không tìm thấy htmlContent trong trang chapter")
 
-        println("Vcomycs-Decrypt: Found htmlContent variable in script")
-
-        // 2) match.group(1) là một JSON string (bị escape). Giải escape thành String thật, rồi parse JSON object EncData
+        // 2) Unescape JSON string và parse EncData
         val jsonStringRaw = match.groupValues[1]
-        // Unescape JSON string: loại bỏ dấu ngoặc kép đầu/cuối và unescape các ký tự
         val jsonString = jsonStringRaw
             .trim()
             .removeSurrounding("\"")
@@ -199,16 +198,10 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
             .replace("\\\\", "\\")
             .replace("\\/", "/")
 
-        println("Vcomycs-Decrypt: Decoded JSON string, length: ${jsonString.length}")
-        println("Vcomycs-Decrypt: JSON preview: ${jsonString.take(100)}...")
-
         val encData = jsonString.parseAs<EncData>()
-        println("Vcomycs-Decrypt: Parsed EncData - ciphertext length: ${encData.ciphertext.length}, salt: ${encData.salt}, iv: ${encData.iv}")
 
-        // 3) Giải mã AES-256-CBC với PBKDF2-HMAC-SHA512 (iterations=999, keyLen=32)
+        // 3) Giải mã AES-256-CBC với PBKDF2-HMAC-SHA512
         val decryptedHtml = decryptChapterHtml(encData)
-        println("Vcomycs-Decrypt: Decrypted HTML, length: ${decryptedHtml.length}")
-        println("Vcomycs-Decrypt: Decrypted preview: ${decryptedHtml.take(200)}...")
 
         // 4) Thay token → ký tự thật
         val fixedHtml = decryptedHtml
@@ -216,32 +209,22 @@ class Vcomycs : ParsedHttpSource(), ConfigurableSource {
             .replace("SJkhMV", ":")
             .replace("uUPzrw", "/")
 
-        println("Vcomycs-Decrypt: Fixed HTML with token replacement")
-        println("Vcomycs-Decrypt: Fixed preview: ${fixedHtml.take(200)}...")
-
         // 5) Parse ảnh từ data-ehwufp
         val imgDoc = Jsoup.parse(fixedHtml, baseUrl)
-        val images = imgDoc.select("img[data-ehwufp], img[data-src], img[src]") // ưu tiên data-ehwufp
+        val images = imgDoc.select("img[data-ehwufp], img[data-src], img[src]")
 
         if (images.isEmpty()) {
-            println("Vcomycs-Decrypt: ERROR - No images found in decrypted HTML")
             throw Exception("Không tìm thấy ảnh nào trong chapter")
         }
 
-        println("Vcomycs-Decrypt: Found ${images.size} images in decrypted HTML")
-
-        val pages = images.mapIndexed { index, img ->
+        return images.mapIndexed { index, img ->
             val url = img.attr("data-ehwufp").ifBlank {
                 img.attr("data-src").ifBlank {
                     img.absUrl("src")
                 }
             }
-            println("Vcomycs-Decrypt: Page ${index + 1}: $url")
             Page(index, imageUrl = url)
         }
-
-        println("Vcomycs-Decrypt: === Successfully parsed ${pages.size} pages ===")
-        return pages
     }
 
     override fun imageUrlParse(document: Document) = throw UnsupportedOperationException()

@@ -1,6 +1,10 @@
 package eu.kanade.tachiyomi.extension.vi.vcomycs
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class SearchResponseDto(
@@ -16,8 +20,14 @@ data class SearchEntryDto(
     val link: String,
     val star: Float,
     val title: String,
-    val vote: String,
-)
+    @SerialName("vote") val voteRaw: JsonElement, // Có thể là String hoặc Int
+) {
+    val vote: String
+        get() = when (voteRaw) {
+            is JsonPrimitive -> voteRaw.jsonPrimitive.content
+            else -> "0"
+        }
+}
 
 @Serializable
 data class EncData(
