@@ -13,7 +13,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
 
                 <data
-                    android:host=" https://teamlanhlungday1.xyz"
+                    android:host="https://nhalung.top/"
                     android:pathPattern="/truyen-tranh/..*"
                     android:scheme="https"
                 />

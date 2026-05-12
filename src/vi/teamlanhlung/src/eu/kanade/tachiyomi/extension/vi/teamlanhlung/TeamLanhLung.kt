@@ -37,7 +37,7 @@ class TeamLanhLung : ParsedHttpSource(), ConfigurableSource {
 
     override val name: String = "Team Lạnh Lùng"
 
-    private val defaultBaseUrl: String = "https://teamlanhlungday1.xyz/"
+    private val defaultBaseUrl: String = "https://nhalung.top/"
 
     override val lang: String = "vi"
 
