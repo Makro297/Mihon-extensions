@@ -1,0 +1,8 @@
+ext {
+    extName = "The Dark Lord's Confession"
+    extClass = '.TheDarkLordsConfession'
+    extVersionCode = 1
+    isNsfw = false
+}
+
+apply from: "$rootDir/common.gradle"

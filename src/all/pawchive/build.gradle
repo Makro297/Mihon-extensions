@@ -1,0 +1,10 @@
+ext {
+    extName = 'Pawchive'
+    extClass = '.Pawchive'
+    themePkg = 'kemono'
+    baseUrl = 'https://pawchive.st'
+    overrideVersionCode = 5
+    isNsfw = true
+}
+
+apply from: "$rootDir/common.gradle"
